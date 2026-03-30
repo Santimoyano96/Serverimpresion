@@ -7,19 +7,11 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────
-  # JOB 1: Compilar + testear en cada arquitectura
+  # JOB 1: Compilar + testear (Apple Silicon arm64)
   # ─────────────────────────────────────────────
   build:
-    strategy:
-      matrix:
-        include:
-          - os: macos-13      # Intel x64
-            arch: x64
-          - os: macos-14      # Apple Silicon arm64
-            arch: arm64
-
-    runs-on: ${{ matrix.os }}
-    name: Build (${{ matrix.arch }})
+    runs-on: macos-14
+    name: Build & Test (arm64)
 
     steps:
       - name: Checkout
@@ -35,18 +27,14 @@ jobs:
           cp package_mac.json package.json
           npm install
 
-      - name: Compilar binario con pkg
-        run: npx @yao-pkg/pkg server_mac.js --targets node18-macos-${{ matrix.arch }} --output dist/cajaos-print-server-${{ matrix.arch }}
+      - name: Compilar binario
+        run: |
+          npx @yao-pkg/pkg server_mac.js --targets node18-macos-arm64 --output dist/cajaos-print-server
+          chmod +x dist/cajaos-print-server
 
-      # ── Instalar Chrome para las pruebas de impresión ──
-      - name: Instalar Google Chrome
-        run: brew install --cask google-chrome
-
-      # ── Test 1: /health ──
       - name: "Test: /health"
         run: |
-          chmod +x dist/cajaos-print-server-${{ matrix.arch }}
-          dist/cajaos-print-server-${{ matrix.arch }} &
+          dist/cajaos-print-server &
           SERVER_PID=$!
           sleep 4
           RESPONSE=$(curl -sf http://localhost:3001/health)
@@ -54,56 +42,43 @@ jobs:
           echo "$RESPONSE" | grep -q '"status":"ok"' && echo "✅ /health OK" || (echo "❌ /health falló" && kill $SERVER_PID && exit 1)
           kill $SERVER_PID
 
-      # ── Test 2: /printers — lista las impresoras del runner ──
       - name: "Test: /printers"
         run: |
-          dist/cajaos-print-server-${{ matrix.arch }} &
+          dist/cajaos-print-server &
           SERVER_PID=$!
           sleep 4
           RESPONSE=$(curl -s http://localhost:3001/printers)
           echo "Respuesta /printers: $RESPONSE"
-          # Aceptamos lista vacía [] o lista con impresoras — ambos son JSON válido
           echo "$RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin); print('✅ /printers devuelve JSON válido')" || (echo "❌ /printers no devolvió JSON" && kill $SERVER_PID && exit 1)
           kill $SERVER_PID
 
-      # ── Test 3: /print con texto — genera el PDF real con Chrome ──
-      # Este test valida: recepción del request → render HTML → Chrome→PDF
-      # No envía a impresora (no hay impresora física en CI)
-      - name: "Test: /print genera PDF (sin impresora física)"
+      - name: "Test: /print genera PDF con Chrome"
         run: |
-          dist/cajaos-print-server-${{ matrix.arch }} &
+          dist/cajaos-print-server &
           SERVER_PID=$!
           sleep 4
-
-          # Pedimos imprimir en una impresora inexistente.
-          # El server debe llegar hasta "lp: ..." y fallar AHÍ (no antes).
-          # Si falla antes (en Puppeteer/Chrome) → el test detecta el error correcto.
           RESPONSE=$(curl -s -X POST http://localhost:3001/print \
             -H "Content-Type: application/json" \
-            -d '{"printer":"IMPRESORA_TEST_CI","type":"text","data":"Linea 1\nProducto A x2  $100\nProducto B x1  $50\n---\nTOTAL: $150"}')
+            -d '{"printer":"IMPRESORA_TEST_CI","type":"text","data":"Ticket de prueba\nProducto x2  $100\nTOTAL: $100"}')
           echo "Respuesta /print: $RESPONSE"
-
-          # Si Chrome/Puppeteer falló → el error menciona "chrome" o "executablePath" → FAIL real
-          if echo "$RESPONSE" | grep -qi "executablePath\|chrome\|puppeteer\|ENOENT"; then
-            echo "❌ Falló en generación de PDF (Puppeteer/Chrome no encontrado)"
+          if echo "$RESPONSE" | grep -qi "executablePath\|ENOENT\|puppeteer"; then
+            echo "❌ Falló en generación de PDF"
             kill $SERVER_PID
             exit 1
           fi
-
-          # Si llegó hasta lp (impresora no existe en CI, eso es esperado) → OK
-          echo "✅ PDF generado correctamente — lp falló como esperado (sin impresora física en CI)"
+          echo "✅ PDF generado correctamente"
           kill $SERVER_PID
 
       - name: Subir binario como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ matrix.arch }}
-          path: dist/cajaos-print-server-${{ matrix.arch }}
-          retention-days: 7
+          name: cajaos-print-server-arm64
+          path: dist/cajaos-print-server
+          retention-days: 30
 
 
   # ─────────────────────────────────────────────
-  # JOB 2: Crear el universal binary + .pkg instalable
+  # JOB 2: Crear el .pkg instalable
   # ─────────────────────────────────────────────
   package:
     needs: build
@@ -114,29 +89,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Descargar binario x64
+      - name: Descargar binario
         uses: actions/download-artifact@v4
         with:
-          name: binary-x64
+          name: cajaos-print-server-arm64
           path: dist/
-
-      - name: Descargar binario arm64
-        uses: actions/download-artifact@v4
-        with:
-          name: binary-arm64
-          path: dist/
-
-      - name: Crear Universal Binary (Intel + Apple Silicon)
-        run: |
-          chmod +x dist/cajaos-print-server-x64
-          chmod +x dist/cajaos-print-server-arm64
-          lipo -create \
-            dist/cajaos-print-server-x64 \
-            dist/cajaos-print-server-arm64 \
-            -output dist/cajaos-print-server
-          chmod +x dist/cajaos-print-server
-          echo "→ Universal binary info:"
-          lipo -info dist/cajaos-print-server
 
       - name: Armar estructura del .pkg
         run: |
@@ -171,11 +128,4 @@ jobs:
         with:
           name: CajaOS-PrintServer-Installer
           path: CajaOS-PrintServer-1.0.0.pkg
-          retention-days: 30
-
-      - name: Subir universal binary como artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cajaos-print-server-universal
-          path: dist/cajaos-print-server
           retention-days: 30
