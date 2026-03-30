@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cajaos.printserver</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/cajaos-print-server</string>
+    </array>
+
+    <!-- Arrancar automáticamente al iniciar el sistema -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Reiniciar si el proceso muere -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Variables de entorno -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PORT</key>
+        <string>3001</string>
+        <!-- Si Chrome no está en la ruta por defecto, descomentar y ajustar: -->
+        <!-- <key>PUPPETEER_EXECUTABLE_PATH</key> -->
+        <!-- <string>/Applications/Google Chrome.app/Contents/MacOS/Google Chrome</string> -->
+    </dict>
+
+    <!-- Logs -->
+    <key>StandardOutPath</key>
+    <string>/var/log/cajaos-printserver.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/cajaos-printserver-error.log</string>
+
+    <!-- Directorio de trabajo -->
+    <key>WorkingDirectory</key>
+    <string>/usr/local/bin</string>
+</dict>
+</plist>

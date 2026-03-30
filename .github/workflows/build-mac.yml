@@ -1,0 +1,152 @@
+name: Build & Package macOS Print Server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # permite lanzarlo manualmente desde la web de GitHub
+
+jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: Compilar el binario para cada arquitectura
+  # ─────────────────────────────────────────────
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-13      # Intel x64
+            arch: x64
+          - os: macos-14      # Apple Silicon arm64
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.arch }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Instalar dependencias
+        run: |
+          cp package_mac.json package.json
+          npm install
+
+      - name: Compilar binario con pkg
+        run: npx @yao-pkg/pkg server_mac.js --targets node18-macos-${{ matrix.arch }} --output dist/cajaos-print-server-${{ matrix.arch }}
+
+      # ── Test rápido: arrancar el server y verificar /health ──
+      - name: Test /health
+        run: |
+          chmod +x dist/cajaos-print-server-${{ matrix.arch }}
+          dist/cajaos-print-server-${{ matrix.arch }} &
+          SERVER_PID=$!
+          echo "Server PID: $SERVER_PID"
+          sleep 4
+          curl -f http://localhost:3001/health
+          echo ""
+          echo "✅ /health OK"
+          kill $SERVER_PID
+
+      - name: Test /printers (puede ser lista vacía en CI, eso es OK)
+        run: |
+          dist/cajaos-print-server-${{ matrix.arch }} &
+          SERVER_PID=$!
+          sleep 4
+          RESPONSE=$(curl -s http://localhost:3001/printers || echo "[]")
+          echo "Respuesta /printers: $RESPONSE"
+          kill $SERVER_PID
+
+      - name: Subir binario como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: dist/cajaos-print-server-${{ matrix.arch }}
+          retention-days: 7
+
+
+  # ─────────────────────────────────────────────
+  # JOB 2: Crear el universal binary + .pkg instalable
+  # ─────────────────────────────────────────────
+  package:
+    needs: build
+    runs-on: macos-14
+    name: Package (.pkg installer)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Descargar binario x64
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-x64
+          path: dist/
+
+      - name: Descargar binario arm64
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-arm64
+          path: dist/
+
+      - name: Crear Universal Binary (Intel + Apple Silicon)
+        run: |
+          chmod +x dist/cajaos-print-server-x64
+          chmod +x dist/cajaos-print-server-arm64
+          lipo -create \
+            dist/cajaos-print-server-x64 \
+            dist/cajaos-print-server-arm64 \
+            -output dist/cajaos-print-server
+          chmod +x dist/cajaos-print-server
+          echo "→ Universal binary info:"
+          lipo -info dist/cajaos-print-server
+
+      - name: Armar estructura del .pkg
+        run: |
+          # Estructura que refleja el filesystem de instalación
+          mkdir -p pkg-payload/usr/local/bin
+          mkdir -p pkg-payload/Library/LaunchDaemons
+          mkdir -p pkg-scripts
+
+          # Binario
+          cp dist/cajaos-print-server pkg-payload/usr/local/bin/cajaos-print-server
+          chmod +x pkg-payload/usr/local/bin/cajaos-print-server
+
+          # Plist del daemon
+          cp com.cajaos.printserver.plist pkg-payload/Library/LaunchDaemons/com.cajaos.printserver.plist
+
+          # Scripts pre/post install
+          cp installer/preinstall  pkg-scripts/preinstall
+          cp installer/postinstall pkg-scripts/postinstall
+          chmod +x pkg-scripts/preinstall
+          chmod +x pkg-scripts/postinstall
+
+      - name: Crear .pkg con pkgbuild
+        run: |
+          pkgbuild \
+            --root ./pkg-payload \
+            --scripts ./pkg-scripts \
+            --identifier com.cajaos.printserver \
+            --version 1.0.0 \
+            --install-location / \
+            CajaOS-PrintServer-1.0.0.pkg
+
+          echo "→ Tamaño del .pkg:"
+          ls -lh CajaOS-PrintServer-1.0.0.pkg
+
+      - name: Subir .pkg como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CajaOS-PrintServer-Installer
+          path: CajaOS-PrintServer-1.0.0.pkg
+          retention-days: 30
+
+      - name: Subir universal binary como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cajaos-print-server-universal
+          path: dist/cajaos-print-server
+          retention-days: 30

@@ -1,0 +1,26 @@
+#!/bin/bash
+# postinstall — Se ejecuta DESPUÉS de copiar los archivos
+# Configura permisos, crea logs y arranca el servicio
+
+BINARY="/usr/local/bin/cajaos-print-server"
+PLIST="/Library/LaunchDaemons/com.cajaos.printserver.plist"
+
+# Permisos del binario
+chmod +x "$BINARY"
+
+# Permisos del plist (launchd lo exige así)
+chown root:wheel "$PLIST"
+chmod 644 "$PLIST"
+
+# Crear archivos de log
+touch /var/log/cajaos-printserver.log
+touch /var/log/cajaos-printserver-error.log
+chmod 644 /var/log/cajaos-printserver.log
+chmod 644 /var/log/cajaos-printserver-error.log
+
+# Arrancar el servicio
+launchctl load "$PLIST"
+
+echo "✅ CajaOS Print Server instalado y corriendo en http://localhost:3001"
+
+exit 0

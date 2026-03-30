@@ -1,0 +1,12 @@
+#!/bin/bash
+# preinstall — Se ejecuta ANTES de copiar los archivos
+# Detiene el servicio si ya estaba corriendo (para poder reemplazar el binario)
+
+PLIST="/Library/LaunchDaemons/com.cajaos.printserver.plist"
+
+if launchctl list | grep -q "com.cajaos.printserver"; then
+  echo "→ Deteniendo servicio anterior..."
+  launchctl unload "$PLIST" 2>/dev/null || true
+fi
+
+exit 0
