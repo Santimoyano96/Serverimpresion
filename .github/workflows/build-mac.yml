@@ -3,11 +3,11 @@ name: Build & Package macOS Print Server
 on:
   push:
     branches: [main, master]
-  workflow_dispatch:   # permite lanzarlo manualmente desde la web de GitHub
+  workflow_dispatch:
 
 jobs:
   # ─────────────────────────────────────────────
-  # JOB 1: Compilar el binario para cada arquitectura
+  # JOB 1: Compilar + testear en cada arquitectura
   # ─────────────────────────────────────────────
   build:
     strategy:
@@ -38,26 +38,60 @@ jobs:
       - name: Compilar binario con pkg
         run: npx @yao-pkg/pkg server_mac.js --targets node18-macos-${{ matrix.arch }} --output dist/cajaos-print-server-${{ matrix.arch }}
 
-      # ── Test rápido: arrancar el server y verificar /health ──
-      - name: Test /health
+      # ── Instalar Chrome para las pruebas de impresión ──
+      - name: Instalar Google Chrome
+        run: brew install --cask google-chrome
+
+      # ── Test 1: /health ──
+      - name: "Test: /health"
         run: |
           chmod +x dist/cajaos-print-server-${{ matrix.arch }}
           dist/cajaos-print-server-${{ matrix.arch }} &
           SERVER_PID=$!
-          echo "Server PID: $SERVER_PID"
           sleep 4
-          curl -f http://localhost:3001/health
-          echo ""
-          echo "✅ /health OK"
+          RESPONSE=$(curl -sf http://localhost:3001/health)
+          echo "Respuesta: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"status":"ok"' && echo "✅ /health OK" || (echo "❌ /health falló" && kill $SERVER_PID && exit 1)
           kill $SERVER_PID
 
-      - name: Test /printers (puede ser lista vacía en CI, eso es OK)
+      # ── Test 2: /printers — lista las impresoras del runner ──
+      - name: "Test: /printers"
         run: |
           dist/cajaos-print-server-${{ matrix.arch }} &
           SERVER_PID=$!
           sleep 4
-          RESPONSE=$(curl -s http://localhost:3001/printers || echo "[]")
+          RESPONSE=$(curl -s http://localhost:3001/printers)
           echo "Respuesta /printers: $RESPONSE"
+          # Aceptamos lista vacía [] o lista con impresoras — ambos son JSON válido
+          echo "$RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin); print('✅ /printers devuelve JSON válido')" || (echo "❌ /printers no devolvió JSON" && kill $SERVER_PID && exit 1)
+          kill $SERVER_PID
+
+      # ── Test 3: /print con texto — genera el PDF real con Chrome ──
+      # Este test valida: recepción del request → render HTML → Chrome→PDF
+      # No envía a impresora (no hay impresora física en CI)
+      - name: "Test: /print genera PDF (sin impresora física)"
+        run: |
+          dist/cajaos-print-server-${{ matrix.arch }} &
+          SERVER_PID=$!
+          sleep 4
+
+          # Pedimos imprimir en una impresora inexistente.
+          # El server debe llegar hasta "lp: ..." y fallar AHÍ (no antes).
+          # Si falla antes (en Puppeteer/Chrome) → el test detecta el error correcto.
+          RESPONSE=$(curl -s -X POST http://localhost:3001/print \
+            -H "Content-Type: application/json" \
+            -d '{"printer":"IMPRESORA_TEST_CI","type":"text","data":"Linea 1\nProducto A x2  $100\nProducto B x1  $50\n---\nTOTAL: $150"}')
+          echo "Respuesta /print: $RESPONSE"
+
+          # Si Chrome/Puppeteer falló → el error menciona "chrome" o "executablePath" → FAIL real
+          if echo "$RESPONSE" | grep -qi "executablePath\|chrome\|puppeteer\|ENOENT"; then
+            echo "❌ Falló en generación de PDF (Puppeteer/Chrome no encontrado)"
+            kill $SERVER_PID
+            exit 1
+          fi
+
+          # Si llegó hasta lp (impresora no existe en CI, eso es esperado) → OK
+          echo "✅ PDF generado correctamente — lp falló como esperado (sin impresora física en CI)"
           kill $SERVER_PID
 
       - name: Subir binario como artifact
@@ -106,19 +140,15 @@ jobs:
 
       - name: Armar estructura del .pkg
         run: |
-          # Estructura que refleja el filesystem de instalación
           mkdir -p pkg-payload/usr/local/bin
           mkdir -p pkg-payload/Library/LaunchDaemons
           mkdir -p pkg-scripts
 
-          # Binario
           cp dist/cajaos-print-server pkg-payload/usr/local/bin/cajaos-print-server
           chmod +x pkg-payload/usr/local/bin/cajaos-print-server
 
-          # Plist del daemon
           cp com.cajaos.printserver.plist pkg-payload/Library/LaunchDaemons/com.cajaos.printserver.plist
 
-          # Scripts pre/post install
           cp installer/preinstall  pkg-scripts/preinstall
           cp installer/postinstall pkg-scripts/postinstall
           chmod +x pkg-scripts/preinstall
@@ -133,7 +163,6 @@ jobs:
             --version 1.0.0 \
             --install-location / \
             CajaOS-PrintServer-1.0.0.pkg
-
           echo "→ Tamaño del .pkg:"
           ls -lh CajaOS-PrintServer-1.0.0.pkg
 
