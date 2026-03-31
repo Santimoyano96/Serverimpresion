@@ -36,23 +36,18 @@ function htmlFromText(text) {
 <html lang="es">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Ticket</title>
 <style>
-  @page { margin: 0; size: 80mm auto; }
-  body { margin: 6mm 0 8mm 0; font-family: -apple-system, system-ui, Roboto, "Segoe UI", Arial, sans-serif; font-size: 12px; }
-  .wrap { width: 80mm; padding: 0 2mm; box-sizing: border-box; }
-  .line { border-top: 1px dashed #000; margin: 6px 0; }
+  @page { margin: 0; size: 72mm auto; }
+  * { box-sizing: border-box; }
+  body { margin: 4mm 2mm 6mm 2mm; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.4; width: 68mm; }
+  .line { border-top: 1px dashed #000; margin: 4px 0; }
   .center { text-align: center; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+  .right { text-align: right; }
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="center"><strong>Página de prueba</strong></div>
-    <div class="line"></div>
-    <div class="mono">${(text || "").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
-  </div>
+  <div class="mono">${(text || "").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br/>")}</div>
 </body>
 </html>`;
 }
@@ -71,13 +66,15 @@ async function renderHtmlToPdf(htmlPath, pdfPath) {
 
   try {
     const page = await browser.newPage();
-    await page.emulateMediaType("screen");
+    await page.emulateMediaType("print");
     await page.goto(`file://${htmlPath}`, { waitUntil: "networkidle0" });
     await page.pdf({
       path: pdfPath,
       printBackground: true,
-      width: "80mm",
-      margin: { top: "4mm", right: "0mm", bottom: "6mm", left: "0mm" },
+      width: "72mm",
+      height: "auto",
+      margin: { top: "0mm", right: "0mm", bottom: "0mm", left: "0mm" },
+      pageRanges: "1",
     });
   } finally {
     await browser.close();
@@ -138,7 +135,7 @@ async function getPrintersMac() {
 
 // ========= Imprimir PDF via lp (CUPS) =========
 async function printPdfMac(pdfPath, printerName) {
-  const args = ["-d", printerName, pdfPath];
+  const args = ["-d", printerName, "-o", "media=72mmx200mm", "-o", "fit-to-page=false", "-o", "scaling=100", pdfPath];
   const { stdout, stderr } = await execFileAsync("lp", args);
   console.log("lp stdout:", stdout);
   if (stderr) console.warn("lp stderr:", stderr);
